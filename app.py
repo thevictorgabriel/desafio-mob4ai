@@ -7,7 +7,6 @@ import pandas as pd
 
 app = Flask(__name__)
 CORS(app)@app.route('/processos', methods=['GET'])
-
 def get_processos():
     """Retorna os registros formatados conforme requisitado"""
     start = request.args.get('start', type=int)
