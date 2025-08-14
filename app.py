@@ -6,22 +6,7 @@ import tempfile
 import pandas as pd
 
 app = Flask(__name__)
-CORS(app)@app.route('/processos', methods=['GET'])
-def get_processos():
-    """Retorna os registros formatados conforme requisitado"""
-    start = request.args.get('start', type=int)
-    end = request.args.get('end', type=int)
-    
-    dados = carregar_dados()
-    if not dados:
-        return jsonify({"erro": "Nenhum dado disponível"}), 404
-    
-    if start is not None:
-        dados = [p for p in dados if p.get("timestamp") and int(p["timestamp"]) >= start]
-    if end is not None:
-        dados = [p for p in dados if p.get("timestamp") and int(p["timestamp"]) <= end]
-    
-    return jsonify(dados), 200
+CORS(app)
 
 UPLOAD_FOLDER = tempfile.gettempdir()
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -44,65 +29,53 @@ def carregar_dados():
         print("Tabelas disponíveis:", tabelas_disponiveis)
         
         tabelas = [t for t in ["processes1", "processes2", "processes3"] if t in tabelas_disponiveis]
-        resultados = []
+        dfs = []
         
         for tabela in tabelas:
             try:
-                cursor.execute(f"SELECT rowid, PackageName, Pids, Metrics FROM {tabela}")
-                dados = cursor.fetchall()
+                cursor.execute(f"PRAGMA table_info({tabela});")
+                colunas = [col[1] for col in cursor.fetchall()]
+                print(f"Colunas em {tabela}:", colunas)
                 
-                for row in dados:
-                    try:
-                        uid = row[0]  
-                        package_name = row[1]
-                        pids = row[2]
-                        
-                        metrics = row[3].split(':')
-                        if len(metrics) >= 6:
-                            metric_data = {
-                                'timestamp': metrics[0],
-                                'usagetime': metrics[1],
-                                'delta_cpu_time': metrics[2],
-                                'cpu_usage': metrics[3],
-                                'rx_data': metrics[4],
-                                'tx_data': metrics[5]
-                            }
-                        else:
-                            metric_data = {
-                                'timestamp': '',
-                                'usagetime': '',
-                                'delta_cpu_time': '',
-                                'cpu_usage': '',
-                                'rx_data': '',
-                                'tx_data': ''
-                            }
-                        
-                        registro = {
-                            'timestamp': metric_data['timestamp'],
-                            'uid': uid,
-                            'package_name': package_name,
-                            'delta_cpu_time': metric_data['delta_cpu_time'],
-                            'cpu_usage': metric_data['cpu_usage'],
-                            'rx_data': metric_data['rx_data'],
-                            'tx_data': metric_data['tx_data'],
-                            'pids': pids
-                        }
-                        resultados.append(registro)
-                        
-                    except Exception as e:
-                        print(f"Erro processando linha da tabela {tabela}: {str(e)}")
-                        continue
-                        
+                query = "SELECT "
+                selects = []
+                
+                if 'PackageName' in colunas:
+                    selects.append("PackageName as package_name")
+                if 'Pids' in colunas:
+                    selects.append("Pids as pids")
+                if 'Metrics' in colunas:
+                    selects.append("Metrics as metrics")
+                if 'ByteSize' in colunas:
+                    selects.append("ByteSize as byte_size")
+                
+                if not selects:
+                    continue
+                    
+                query += ", ".join(selects) + f" FROM {tabela}"
+                df = pd.read_sql_query(query, conn)
+                
+                if 'pids' in df.columns:
+                    df['pids'] = df['pids'].astype(str)
+                if 'metrics' in df.columns:
+                    df['metrics'] = df['metrics'].astype(str)
+                
+                dfs.append(df)
+                
             except Exception as e:
-                print(f"Erro acessando tabela {tabela}: {str(e)}")
+                print(f"Erro processando {tabela}: {str(e)}")
                 continue
                 
         conn.close()
-        return resultados
         
+        if dfs:
+            df_unificado = pd.concat(dfs, ignore_index=True)
+            return df_unificado.to_dict(orient="records")
+            
     except Exception as e:
-        print(f"Erro geral ao acessar banco: {str(e)}")
-        return []
+        print(f"Erro ao acessar banco: {str(e)}")
+        
+    return []
 
 @app.route('/upload', methods=['POST'])
 def upload_sqlite():
